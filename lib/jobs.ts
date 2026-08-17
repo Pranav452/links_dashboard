@@ -42,6 +42,11 @@ const MONTH_NAMES = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ]
 
+export const MONTH_FULL_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+]
+
 /** "2026-04" → "Apr 2026" */
 export function fmtMonth(month: string): string {
   const [y, m] = month.split("-")
@@ -49,6 +54,48 @@ export function fmtMonth(month: string): string {
   if (!y || idx < 0 || idx > 11) return month
   return `${MONTH_NAMES[idx]} ${y}`
 }
+
+/** "2026-04" → "April 2026" (filter-bar labels). */
+export function fmtMonthLong(month: string): string {
+  const [y, m] = month.split("-")
+  const idx = Number(m) - 1
+  if (!y || idx < 0 || idx > 11) return month
+  return `${MONTH_FULL_NAMES[idx]} ${y}`
+}
+
+/** "2026-05" → "2026-04" (previous calendar month). */
+export function prevMonth(month: string): string {
+  const [y, m] = month.split("-").map(Number)
+  if (!y || !m) return month
+  const py = m === 1 ? y - 1 : y
+  const pm = m === 1 ? 12 : m - 1
+  return `${py}-${String(pm).padStart(2, "0")}`
+}
+
+// ---------------------------------------------------------------------------
+// Branch slugs — "Delhi Air" ↔ "delhi-air" for /dashboard/branch/[slug]
+// ---------------------------------------------------------------------------
+
+export function branchSlug(branch: string): string {
+  return branch
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+}
+
+/** Reverse lookup against the branches present in the dataset. */
+export function branchFromSlug(slug: string, branches: string[]): string | null {
+  return branches.find((b) => branchSlug(b) === slug) ?? null
+}
+
+// ---------------------------------------------------------------------------
+// Allowed vocabularies (template validation lists)
+// ---------------------------------------------------------------------------
+
+export const DEPARTMENTS = ["Air Import", "Air Export", "Sea Import", "Sea Export"] as const
+export const SERVICE_SCOPES = ["Clearance Only", "Freight + Clearance", "Freight Only"] as const
+export const MODES = ["Air", "FCL", "LCL"] as const
+export const NOMINATION_TYPES = ["Nomination", "Freehand"] as const
 
 /** Sorted unique values of a string field across jobs (blanks dropped). */
 export function distinct(jobs: Job[], key: keyof Job): string[] {

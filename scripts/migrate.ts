@@ -1,6 +1,9 @@
 // Creates the Neon tables for links-branches. Run: npx tsx scripts/migrate.ts
 // No-op without DATABASE_URL (the app runs fine in file mode).
 import { neon } from "@neondatabase/serverless"
+import { loadEnvLocal } from "./env"
+
+loadEnvLocal()
 
 async function main() {
   const url = process.env.DATABASE_URL

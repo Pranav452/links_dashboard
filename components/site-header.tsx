@@ -1,17 +1,23 @@
 import Image from "next/image"
 import Link from "next/link"
+import { Suspense } from "react"
 import { LogOut } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { logout } from "@/app/login/actions"
+import { NavLinks } from "@/components/nav-links"
 import { AnimatedThemeToggle } from "@/components/theme-toggle"
 import { getSession } from "@/lib/auth"
+import { branchSlug, distinct } from "@/lib/jobs"
 import { loadJobs } from "@/lib/store"
 
 export async function SiteHeader() {
   const session = await getSession()
   const dataset = session ? await loadJobs() : null
+  const branches = dataset
+    ? distinct(dataset.jobs, "branch").map((name) => ({ name, slug: branchSlug(name) }))
+    : []
 
   return (
     <header className="sticky top-0 z-40 border-b border-foreground/[0.06] bg-background/80 backdrop-blur-xl">
@@ -28,22 +34,9 @@ export async function SiteHeader() {
           </Link>
 
           {session && (
-            <nav className="hidden items-center gap-1 md:flex">
-              <Link
-                href="/dashboard"
-                className="rounded-full px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
-              >
-                Dashboard
-              </Link>
-              {session.role === "admin" && (
-                <Link
-                  href="/admin"
-                  className="rounded-full px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
-                >
-                  Admin panel
-                </Link>
-              )}
-            </nav>
+            <Suspense fallback={null}>
+              <NavLinks branches={branches} isAdmin={session.role === "admin"} />
+            </Suspense>
           )}
         </div>
 

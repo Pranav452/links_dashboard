@@ -6,6 +6,9 @@ import { promises as fs } from "node:fs"
 import path from "node:path"
 
 import { neon } from "@neondatabase/serverless"
+import { loadEnvLocal } from "./env"
+
+loadEnvLocal()
 
 const SOURCE = process.argv[2] ?? "C:\\Users\\Manilal\\Downloads\\LINKS Branch Data (Normalized)\\normalized-jobs.json"
 const DATA_DIR = path.join(process.cwd(), "data")
