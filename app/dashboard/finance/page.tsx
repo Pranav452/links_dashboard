@@ -5,10 +5,18 @@ import { KpiCard } from "@/components/charts/kpi-card"
 import { FilterBar } from "@/components/filter-bar"
 import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
-import { filterJobs, fmtINR, fmtNum } from "@/lib/analytics"
+import { fmtINR, fmtNum } from "@/lib/analytics"
 import { getSession } from "@/lib/auth"
-import { branchFromSlug, branchSlug, distinct, fmtMonth, fmtMonthLong, jobGpInr } from "@/lib/jobs"
-import { loadExpenses, loadJobs } from "@/lib/store"
+import { DataErrorPage } from "@/components/data-error"
+import { branchFromSlug, branchSlug, fmtMonth, fmtMonthLong, jobGpInr, type Job } from "@/lib/jobs"
+import {
+  dataErrorMessage,
+  loadExpenses,
+  loadJobs,
+  loadJobsMeta,
+  type ExpensesMap,
+  type JobsMeta,
+} from "@/lib/store"
 import { cn } from "@/lib/utils"
 import { saveExpensesGrid } from "./actions"
 
@@ -36,15 +44,32 @@ export default async function FinancePage({
   searchParams: Promise<{ month?: string; branch?: string }>
 }) {
   const sp = await searchParams
-  const [session, dataset, expensesMap] = await Promise.all([getSession(), loadJobs(), loadExpenses()])
-  const { jobs } = dataset
+  const session = await getSession()
   const isAdmin = session?.role === "admin"
 
-  const months = distinct(jobs, "month")
-  const branchNames = distinct(jobs, "branch")
-  const month = sp.month && months.includes(sp.month) ? sp.month : null
-  const branchName = sp.branch ? branchFromSlug(sp.branch, branchNames) : null
-  const filtered = filterJobs(jobs, { month, branch: branchName })
+  // Finance needs no cross-month trend, so BOTH filters are pushed into SQL —
+  // a filtered view only ever fetches the rows it renders.
+  let meta: JobsMeta
+  let expensesMap: ExpensesMap
+  let filtered: Job[]
+  let month: string | null = null
+  let branchName: string | null = null
+  try {
+    meta = await loadJobsMeta()
+    month = sp.month && meta.months.includes(sp.month) ? sp.month : null
+    branchName = sp.branch ? branchFromSlug(sp.branch, meta.branches) : null
+    const [dataset, expenses] = await Promise.all([
+      loadJobs({ ...(branchName ? { branch: branchName } : {}), ...(month ? { month } : {}) }),
+      loadExpenses(),
+    ])
+    filtered = dataset.jobs
+    expensesMap = expenses
+  } catch (err) {
+    return <DataErrorPage crumb="Finance" message={dataErrorMessage(err)} />
+  }
+
+  const months = meta.months
+  const branchNames = meta.branches
 
   const expensesFor = (branch: string): number => {
     const row = expensesMap[branch] ?? {}

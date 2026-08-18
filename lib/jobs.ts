@@ -1,6 +1,6 @@
 // Domain types for LINKS branch productivity data.
 // One Job row = one job line from a branch's monthly productivity sheet,
-// normalized upstream into normalized-jobs.json / the links_jobs_versions table.
+// stored as one ROW in the Neon table links_jobs (see lib/store.ts).
 
 export interface Job {
   branch: string
@@ -29,6 +29,41 @@ export interface Job {
   buying_inr: number | null
   selling_inr: number | null
   remarks: string
+}
+
+// ---------------------------------------------------------------------------
+// Coercion — turns a loosely-typed record (normalized JSON export, raw DB row)
+// into a Job with every field present. Missing strings become "", missing
+// numbers become null.
+// ---------------------------------------------------------------------------
+
+const STRING_FIELDS = [
+  "branch", "month", "department", "service_scope", "job_no", "job_date", "customer", "cha",
+  "nomination_freehand", "nomination_agent", "carrier", "mbl_mawb", "hbl_type", "mode",
+  "container_size", "origin", "pol", "pod", "final_destination", "remarks",
+] as const
+
+const NUMBER_FIELDS = [
+  "containers_count", "packages", "gross_wt_kg", "chargeable_wt_kg", "buying_inr", "selling_inr",
+] as const
+
+export function normalizeJob(input: unknown): Job {
+  const r = (input ?? {}) as Record<string, unknown>
+  const job = {} as Record<string, unknown>
+  for (const k of STRING_FIELDS) {
+    const v = r[k]
+    job[k] = v === null || v === undefined ? "" : String(v).trim()
+  }
+  for (const k of NUMBER_FIELDS) {
+    const v = r[k]
+    if (v === null || v === undefined || v === "") {
+      job[k] = null
+      continue
+    }
+    const n = typeof v === "number" ? v : Number(String(v).replace(/,/g, "").trim())
+    job[k] = Number.isFinite(n) ? n : null
+  }
+  return job as unknown as Job
 }
 
 /** Gross profit for a job — null when either side of the money is missing. */

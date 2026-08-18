@@ -21,8 +21,9 @@ import {
   monthlyTrend,
   nominationSplit,
 } from "@/lib/analytics"
-import { branchFromSlug, branchSlug, distinct, fmtMonth, fmtMonthLong } from "@/lib/jobs"
-import { loadJobs } from "@/lib/store"
+import { branchFromSlug, branchSlug, fmtMonth, fmtMonthLong } from "@/lib/jobs"
+import { DataErrorPage } from "@/components/data-error"
+import { dataErrorMessage, loadJobs, loadJobsMeta, type JobsDataset, type JobsMeta } from "@/lib/store"
 
 export const metadata: Metadata = {
   title: "Dashboard · LINKS Branch Analytics",
@@ -36,15 +37,28 @@ export default async function DashboardPage({
   searchParams: Promise<{ month?: string; branch?: string }>
 }) {
   const sp = await searchParams
-  const dataset = await loadJobs()
-  const { jobs } = dataset
 
-  const months = distinct(jobs, "month")
-  const branchNames = distinct(jobs, "branch")
+  // Axes come from SQL aggregates; rows come from a branch-scoped query, so a
+  // branch filter never ships the whole table. The month filter stays in memory
+  // because the trend chart needs every month of the active branch scope.
+  let meta: JobsMeta
+  let dataset: JobsDataset
+  const branchSlugParam = sp.branch ?? null
+  try {
+    meta = await loadJobsMeta()
+    const scopedBranch = branchSlugParam ? branchFromSlug(branchSlugParam, meta.branches) : null
+    dataset = await loadJobs(scopedBranch ? { branch: scopedBranch } : {})
+  } catch (err) {
+    return <DataErrorPage crumb="HQ overview" message={dataErrorMessage(err)} />
+  }
+
+  const { jobs } = dataset
+  const months = meta.months
+  const branchNames = meta.branches
   const branchOptions = branchNames.map((name) => ({ name, slug: branchSlug(name) }))
 
   const month = sp.month && months.includes(sp.month) ? sp.month : null
-  const branchName = sp.branch ? branchFromSlug(sp.branch, branchNames) : null
+  const branchName = branchSlugParam ? branchFromSlug(branchSlugParam, branchNames) : null
   const branchScoped = filterJobs(jobs, { month: null, branch: branchName })
   const filtered = filterJobs(jobs, { month, branch: branchName })
 
@@ -104,8 +118,8 @@ export default async function DashboardPage({
                 branch={branchName ? branchSlug(branchName) : null}
               />
               <span className="text-xs text-muted-foreground">
-                {dataset.source === "none"
-                  ? "No data loaded — seed or upload from the admin panel"
+                {meta.total === 0
+                  ? "No data loaded — upload a branch template from the admin panel"
                   : `Source: ${dataset.source}${dataset.updatedAt ? ` · ${new Date(dataset.updatedAt).toLocaleDateString("en-IN")}` : ""}`}
               </span>
             </div>

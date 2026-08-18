@@ -20,8 +20,9 @@ import {
   isSea,
   monthlyTrend,
 } from "@/lib/analytics"
-import { branchFromSlug, branchSlug, distinct, fmtMonth, fmtMonthLong } from "@/lib/jobs"
-import { loadJobs } from "@/lib/store"
+import { branchFromSlug, branchSlug, fmtMonth, fmtMonthLong, type Job } from "@/lib/jobs"
+import { DataErrorPage } from "@/components/data-error"
+import { dataErrorMessage, loadJobs, loadJobsMeta, type JobsMeta } from "@/lib/store"
 
 export const dynamic = "force-dynamic"
 
@@ -44,17 +45,25 @@ export default async function BranchPage({
   searchParams: Promise<{ month?: string }>
 }) {
   const [{ slug }, sp] = await Promise.all([params, searchParams])
-  const dataset = await loadJobs()
-  const { jobs } = dataset
 
-  const months = distinct(jobs, "month")
-  const branchNames = distinct(jobs, "branch")
-  const branch = branchFromSlug(slug, branchNames)
-  if (!branch) notFound()
+  // Only this branch's rows are fetched (SQL-side filter). The month filter is
+  // applied in memory because the trend chart spans every month of the branch.
+  let meta: JobsMeta
+  let branchJobs: Job[]
+  let resolved: string | null = null
+  try {
+    meta = await loadJobsMeta()
+    resolved = branchFromSlug(slug, meta.branches)
+    branchJobs = resolved ? (await loadJobs({ branch: resolved })).jobs : []
+  } catch (err) {
+    return <DataErrorPage crumb="Branch" message={dataErrorMessage(err)} />
+  }
+  if (!resolved) notFound()
 
+  const months = meta.months
+  const branch = resolved
   const month = sp.month && months.includes(sp.month) ? sp.month : null
-  const branchJobs = filterJobs(jobs, { month: null, branch })
-  const filtered = filterJobs(jobs, { month, branch })
+  const filtered = filterJobs(branchJobs, { month, branch: null })
 
   const customers = new Set(filtered.map((j) => j.customer.trim()).filter(Boolean)).size
   const seaJobs = filtered.filter(isSea).length
@@ -101,7 +110,7 @@ export default async function BranchPage({
             </h1>
             <FilterBar
               months={months}
-              branches={branchNames.map((name) => ({ name, slug: branchSlug(name) }))}
+              branches={meta.branches.map((name) => ({ name, slug: branchSlug(name) }))}
               month={month}
               branch={slug}
             />

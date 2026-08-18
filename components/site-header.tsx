@@ -9,15 +9,23 @@ import { logout } from "@/app/login/actions"
 import { NavLinks } from "@/components/nav-links"
 import { AnimatedThemeToggle } from "@/components/theme-toggle"
 import { getSession } from "@/lib/auth"
-import { branchSlug, distinct } from "@/lib/jobs"
-import { loadJobs } from "@/lib/store"
+import { branchSlug } from "@/lib/jobs"
+import { loadJobsMeta, type JobsMeta } from "@/lib/store"
 
 export async function SiteHeader() {
   const session = await getSession()
-  const dataset = session ? await loadJobs() : null
-  const branches = dataset
-    ? distinct(dataset.jobs, "branch").map((name) => ({ name, slug: branchSlug(name) }))
-    : []
+
+  // Aggregate-only read: the header must never pull job rows. A DB outage
+  // degrades the nav to "no branches" rather than taking every page down.
+  let meta: JobsMeta | null = null
+  if (session) {
+    try {
+      meta = await loadJobsMeta()
+    } catch {
+      meta = null
+    }
+  }
+  const branches = meta ? meta.branches.map((name) => ({ name, slug: branchSlug(name) })) : []
 
   return (
     <header className="sticky top-0 z-40 border-b border-foreground/[0.06] bg-background/80 backdrop-blur-xl">
@@ -41,13 +49,13 @@ export async function SiteHeader() {
         </div>
 
         <div className="flex items-center gap-3">
-          {session && dataset && dataset.jobs.length > 0 && (
+          {session && meta && meta.total > 0 && (
             <Badge
               variant="outline"
               className="hidden gap-1.5 rounded-full border-foreground/10 bg-foreground/[0.03] px-3 py-1 text-[11px] font-normal text-muted-foreground md:inline-flex"
             >
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
-              {dataset.jobs.length.toLocaleString("en-IN")} jobs loaded
+              {meta.total.toLocaleString("en-IN")} jobs loaded
             </Badge>
           )}
 

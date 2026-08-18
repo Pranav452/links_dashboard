@@ -93,7 +93,6 @@ export function UploadForm() {
             <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
             <span className="text-sm font-medium">
               {state.branch} · {state.month ? fmtMonth(state.month) : ""} ingested
-              {state.versionId ? ` · version #${state.versionId}` : ""}
             </span>
           </div>
           <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground tabular-nums">
@@ -101,7 +100,7 @@ export function UploadForm() {
               <span className="font-semibold text-foreground">{state.added}</span> rows added
             </span>
             <span>
-              <span className="font-semibold text-foreground">{state.replaced}</span> previous rows replaced
+              <span className="font-semibold text-foreground">{state.replaced}</span> previous rows deleted
             </span>
             {(state.skippedEmpty ?? 0) > 0 && <span>{state.skippedEmpty} empty rows skipped</span>}
             {state.fortnight && <span>Fortnight: {state.fortnight}</span>}

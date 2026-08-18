@@ -5,10 +5,9 @@ import { revalidatePath } from "next/cache"
 import { audit, getSession } from "@/lib/auth"
 import { parseTemplate } from "@/lib/ingest"
 import { fmtMonth } from "@/lib/jobs"
-import { activateVersion, loadJobs, saveJobs } from "@/lib/store"
+import { loadJobsMeta, replaceBranchMonth } from "@/lib/store"
 
 const MAX_BYTES = 8 * 1024 * 1024
-
 
 export interface IngestState {
   error?: string
@@ -21,12 +20,12 @@ export interface IngestState {
   replaced?: number
   skippedEmpty?: number
   rowErrors?: string[]
-  versionId?: number | null
   totalJobs?: number
 }
 
 // Parses a filled productivity template and REPLACES that branch+month's rows
-// in the dataset (all other rows are kept). Saves a new version.
+// in links_jobs (one transactional delete + insert). Every other branch and
+// month is untouched; the swap is logged to links_uploads.
 export async function ingestTemplate(_prev: IngestState, formData: FormData): Promise<IngestState> {
   const session = await getSession()
   if (!session || session.role !== "admin") {
@@ -59,24 +58,23 @@ export async function ingestTemplate(_prev: IngestState, formData: FormData): Pr
       }
     }
 
-    const current = await loadJobs()
-    const kept = current.jobs.filter((j) => !(j.branch === parsed.branch && j.month === parsed.month))
-    const replaced = current.jobs.length - kept.length
-    const merged = [...kept, ...parsed.jobs]
-
-    const versionId = await saveJobs(
-      merged,
+    const { deleted, inserted } = await replaceBranchMonth(
+      parsed.branch,
+      parsed.month,
+      parsed.jobs,
       `upload:${file.name} · ${parsed.branch} ${fmtMonth(parsed.month)}`,
       session.u,
     )
+
+    const meta = await loadJobsMeta()
 
     await audit("template-ingested", {
       user: session.u,
       file: file.name,
       branch: parsed.branch,
       month: parsed.month,
-      added: String(parsed.jobs.length),
-      replaced: String(replaced),
+      added: String(inserted),
+      replaced: String(deleted),
     })
     revalidatePath("/", "layout")
 
@@ -86,27 +84,13 @@ export async function ingestTemplate(_prev: IngestState, formData: FormData): Pr
       branch: parsed.branch,
       month: parsed.month,
       fortnight: parsed.fortnight,
-      added: parsed.jobs.length,
-      replaced,
+      added: inserted,
+      replaced: deleted,
       skippedEmpty: parsed.skippedEmpty,
       rowErrors: parsed.rowErrors,
-      versionId,
-      totalJobs: merged.length,
+      totalJobs: meta.total,
     }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }
   }
-}
-
-// Activates (rolls back to) a stored dataset version — DB mode only.
-export async function activateVersionAction(formData: FormData): Promise<void> {
-  const session = await getSession()
-  if (!session || session.role !== "admin") return
-
-  const id = Number(formData.get("id"))
-  if (!Number.isInteger(id)) return
-
-  await activateVersion(id)
-  await audit("version-activated", { user: session.u, version: String(id) })
-  revalidatePath("/", "layout")
 }
