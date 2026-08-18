@@ -6,14 +6,11 @@ import { getSql, withRetry } from "./db"
 
 const DATA_DIR = path.join(process.cwd(), "data")
 const JOBS_FILE = path.join(DATA_DIR, "jobs.json")
-// Git-tracked bundled seed (Apr–Jul 2026 normalized history) so a fresh
-// deployment shows data before the DB holds any version.
-const SEED_FILE = path.join(DATA_DIR, "seed-jobs.json")
 const EXPENSES_FILE = path.join(DATA_DIR, "expenses.json")
 
 // ---------------------------------------------------------------------------
-// Jobs dataset — versioned in Neon (links_jobs_versions), file fallback.
-// Priority: active version in Neon → data/jobs.json → bundled seed → empty.
+// Jobs dataset — versioned in Neon (links_jobs_versions). data/jobs.json is a
+// local dev convenience only; production always reads the database.
 // ---------------------------------------------------------------------------
 
 export interface JobsDataset {
@@ -52,29 +49,20 @@ export async function loadJobs(): Promise<JobsDataset> {
     }
   }
 
-  for (const file of [JOBS_FILE, SEED_FILE]) {
-    try {
-      const raw = JSON.parse(await fs.readFile(file, "utf8")) as Partial<JobsDataset>
-      if (Array.isArray(raw.jobs)) {
-        return {
-          jobs: raw.jobs as Job[],
-          updatedAt: raw.updatedAt ?? null,
-          source: raw.source ?? (file === SEED_FILE ? "bundled-seed" : "file"),
-          versionId: null,
-        }
+  try {
+    const raw = JSON.parse(await fs.readFile(JOBS_FILE, "utf8")) as Partial<JobsDataset>
+    if (Array.isArray(raw.jobs)) {
+      return {
+        jobs: raw.jobs as Job[],
+        updatedAt: raw.updatedAt ?? null,
+        source: raw.source ?? "file",
+        versionId: null,
       }
-    } catch {
-      // fall through to next fallback
     }
+  } catch {
+    // no local file — empty dataset
   }
   return EMPTY
-}
-
-/** Bundled seed dataset (git-tracked), for the one-time DB seeding action. */
-export async function loadBundledSeed(): Promise<Job[]> {
-  const raw = JSON.parse(await fs.readFile(SEED_FILE, "utf8")) as Partial<JobsDataset>
-  if (!Array.isArray(raw.jobs)) throw new Error("Bundled seed missing or malformed")
-  return raw.jobs as Job[]
 }
 
 /**

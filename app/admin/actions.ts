@@ -5,34 +5,10 @@ import { revalidatePath } from "next/cache"
 import { audit, getSession } from "@/lib/auth"
 import { parseTemplate } from "@/lib/ingest"
 import { fmtMonth } from "@/lib/jobs"
-import { activateVersion, loadBundledSeed, loadJobs, saveJobs } from "@/lib/store"
-import { dbEnabled } from "@/lib/db"
+import { activateVersion, loadJobs, saveJobs } from "@/lib/store"
 
 const MAX_BYTES = 8 * 1024 * 1024
 
-/** Plain-form wrapper — the page shows success via the version table appearing. */
-export async function seedDatabaseAction(): Promise<void> {
-  await seedDatabaseFromBundle()
-}
-
-// One-time DB seeding: publish the git-tracked bundled dataset (Apr–Jul 2026
-// history) as the first Neon version. Runs through the server's network, so a
-// broken local DNS never matters.
-export async function seedDatabaseFromBundle(): Promise<{ ok: boolean; message: string }> {
-  const session = await getSession()
-  if (!session || session.role !== "admin") return { ok: false, message: "Admin session required." }
-  if (!dbEnabled()) return { ok: false, message: "Database not configured (DATABASE_URL missing)." }
-  try {
-    const jobs = await loadBundledSeed()
-    const id = await saveJobs(jobs, "bundled-seed:apr-jul-2026", session.u)
-    await audit("seed_database", { user: session.u, jobs: String(jobs.length), version: String(id ?? "") })
-    revalidatePath("/admin")
-    revalidatePath("/dashboard")
-    return { ok: true, message: `Seeded ${jobs.length} jobs into the database as version ${id}.` }
-  } catch (err) {
-    return { ok: false, message: err instanceof Error ? err.message : "Seeding failed." }
-  }
-}
 
 export interface IngestState {
   error?: string

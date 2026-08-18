@@ -10,7 +10,7 @@ import { getSession } from "@/lib/auth"
 import { dbEnabled } from "@/lib/db"
 import { fmtNum } from "@/lib/analytics"
 import { listVersions, loadJobs } from "@/lib/store"
-import { activateVersionAction, seedDatabaseAction } from "./actions"
+import { activateVersionAction } from "./actions"
 import { UploadForm } from "./upload-form"
 
 export const metadata: Metadata = {
@@ -129,23 +129,7 @@ export default async function AdminPage() {
                 </table>
               </div>
             ) : (
-              <div className="flex flex-col gap-3">
-                <p className="text-xs text-muted-foreground">
-                  No versions stored yet. Publish the bundled Apr–Jul 2026 history ({fmtNum(dataset.jobs.length)} jobs)
-                  as the first database version, or upload a template to create one.
-                </p>
-                <form action={seedDatabaseAction}>
-                  <Button
-                    type="submit"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 gap-1.5 rounded-full border-emerald-500/30 px-3 text-xs text-emerald-600 dark:text-emerald-400"
-                  >
-                    <History className="h-3.5 w-3.5" />
-                    Seed database with bundled history
-                  </Button>
-                </form>
-              </div>
+              <p className="text-xs text-muted-foreground">No versions stored yet — upload a template to create one.</p>
             )
           ) : (
             <div className="flex flex-wrap gap-x-8 gap-y-2 text-xs text-muted-foreground">

@@ -40,6 +40,5 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# runtime state (jobs dataset, expenses, audit log) — but the bundled seed ships with the repo
-/data/*
-!/data/seed-jobs.json
+# runtime state (jobs dataset, expenses, audit log)
+/data/
