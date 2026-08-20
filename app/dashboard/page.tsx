@@ -10,6 +10,7 @@ import { FilterBar } from "@/components/filter-bar"
 import { SiteHeader } from "@/components/site-header"
 import {
   airTonnes,
+  airWeightCoverage,
   branchComparison,
   countBy,
   filterJobs,
@@ -67,6 +68,7 @@ export default async function DashboardPage({
   const airJobs = filtered.filter(isAir).length
   const clearanceOnly = filtered.filter(isClearanceOnly).length
   const tonnes = airTonnes(filtered)
+  const wtCoverage = airWeightCoverage(filtered)
 
   const byBranch = countBy(filtered, (j) => j.branch)
   const deptMix = countBy(filtered, (j) => j.department)
@@ -133,7 +135,19 @@ export default async function DashboardPage({
           <KpiCard label="Sea jobs" value={fmtNum(seaJobs)} icon={<Ship />} sub="Sea Import + Sea Export" />
           <KpiCard label="Air jobs" value={fmtNum(airJobs)} icon={<Plane />} sub="Air Import + Air Export" />
           <KpiCard label="Clearance only" value={fmtNum(clearanceOnly)} icon={<Stamp />} sub="Service scope = Clearance Only" />
-          <KpiCard label="Air tonnage" value={fmtTonnes(tonnes)} unit="t" icon={<Scale />} sub="Gross weight of Air dept jobs" />
+          <KpiCard
+            label="Air tonnage"
+            value={wtCoverage.reported > 0 ? fmtTonnes(tonnes) : "—"}
+            unit={wtCoverage.reported > 0 ? "t" : undefined}
+            icon={<Scale />}
+            sub={
+              wtCoverage.air === 0
+                ? "No air jobs in this scope"
+                : wtCoverage.reported === 0
+                  ? `Weight not reported on ${fmtNum(wtCoverage.air)} air jobs`
+                  : `Gross weight · ${fmtNum(wtCoverage.reported)} of ${fmtNum(wtCoverage.air)} air jobs report it`
+            }
+          />
         </div>
 
         {/* Monthly trend + nomination split */}

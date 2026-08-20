@@ -56,6 +56,19 @@ export function airTonnes(jobs: Job[]): number {
   return kg / 1000
 }
 
+/**
+ * Air-weight reporting coverage for a scope: how many Air jobs actually carry a
+ * gross weight. Several branches never record weight at all — a plain 0.0 t
+ * reads as a broken metric, so callers show "not reported" when reported === 0.
+ */
+export function airWeightCoverage(jobs: Job[]): { air: number; reported: number } {
+  const air = jobs.filter(isAir)
+  return {
+    air: air.length,
+    reported: air.filter((j) => j.gross_wt_kg !== null && j.gross_wt_kg > 0).length,
+  }
+}
+
 /** Jobs per month across the given month axis (respects any pre-filtering). */
 export function monthlyTrend(jobs: Job[], months: string[]): { month: string; count: number }[] {
   const map = new Map<string, number>()
