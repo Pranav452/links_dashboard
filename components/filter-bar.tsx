@@ -3,7 +3,7 @@
 import { usePathname, useRouter } from "next/navigation"
 import { useTransition } from "react"
 
-import { fmtMonthLong } from "@/lib/jobs"
+import type { PeriodOption } from "@/lib/period"
 import { cn } from "@/lib/utils"
 
 export interface BranchOption {
@@ -11,20 +11,26 @@ export interface BranchOption {
   slug: string
 }
 
-// Shared month + branch filter. Writes ?month= (and ?branch= slug) to the URL;
+// Shared period + branch filter. Writes ?month= (and ?branch= slug) to the URL;
 // server components recompute everything for the selection (vipar's
-// period-filter pattern). On /dashboard/branch/[slug] pages the branch select
+// period-filter pattern). ?month= carries a period: "fy-2026", "all" or a single
+// "YYYY-MM"; no param = the default period (latest fiscal year), so the Clear
+// button returns to it. On /dashboard/branch/[slug] pages the branch select
 // navigates between branch pages instead of setting a query param.
 export function FilterBar({
+  fiscalYears,
   months,
   branches,
-  month,
+  period,
+  defaultPeriod,
   branch,
   className,
 }: {
-  months: string[] // "YYYY-MM", sorted asc
+  fiscalYears: PeriodOption[] // newest first
+  months: PeriodOption[] // sorted asc
   branches: BranchOption[]
-  month: string | null
+  period: string // active ?month= value (periodParam)
+  defaultPeriod: string // periodParam of the default period
   branch: string | null // slug
   className?: string
 }) {
@@ -34,9 +40,9 @@ export function FilterBar({
 
   const onBranchPage = pathname.startsWith("/dashboard/branch/")
 
-  const apply = (m: string | null, b: string | null) => {
+  const apply = (p: string, b: string | null) => {
     const params = new URLSearchParams()
-    if (m !== null) params.set("month", m)
+    if (p !== defaultPeriod) params.set("month", p)
     let target = pathname
     if (onBranchPage) {
       target = b !== null ? `/dashboard/branch/${b}` : "/dashboard"
@@ -57,25 +63,36 @@ export function FilterBar({
     <div className={cn("flex flex-wrap items-center gap-2", pending && "opacity-60", className)}>
       <span className="text-[10px] font-medium tracking-widest text-muted-foreground uppercase">Filter</span>
       <select
-        aria-label="Month"
+        aria-label="Period"
         className={selectCls}
-        value={month ?? "all"}
-        onChange={(e) => apply(e.target.value === "all" ? null : e.target.value, branch)}
+        value={period}
+        onChange={(e) => apply(e.target.value, branch)}
       >
+        {fiscalYears.length > 0 && (
+          <optgroup label="Fiscal year" style={optionStyle}>
+            {fiscalYears.map((o) => (
+              <option key={o.value} value={o.value} style={optionStyle}>
+                {o.label}
+              </option>
+            ))}
+          </optgroup>
+        )}
         <option value="all" style={optionStyle}>
           All months
         </option>
-        {months.map((m) => (
-          <option key={m} value={m} style={optionStyle}>
-            {fmtMonthLong(m)}
-          </option>
-        ))}
+        <optgroup label="Month" style={optionStyle}>
+          {months.map((o) => (
+            <option key={o.value} value={o.value} style={optionStyle}>
+              {o.label}
+            </option>
+          ))}
+        </optgroup>
       </select>
       <select
         aria-label="Branch"
         className={selectCls}
         value={branch ?? "all"}
-        onChange={(e) => apply(month, e.target.value === "all" ? null : e.target.value)}
+        onChange={(e) => apply(period, e.target.value === "all" ? null : e.target.value)}
       >
         <option value="all" style={optionStyle}>
           All branches
@@ -86,9 +103,9 @@ export function FilterBar({
           </option>
         ))}
       </select>
-      {(month !== null || branch !== null) && (
+      {(period !== defaultPeriod || branch !== null) && (
         <button
-          onClick={() => apply(null, null)}
+          onClick={() => apply(defaultPeriod, null)}
           className="rounded-full border border-emerald-500/30 px-2.5 py-1 text-[10px] font-medium text-emerald-600 dark:text-emerald-400 uppercase transition-colors hover:bg-emerald-500/10"
         >
           Clear

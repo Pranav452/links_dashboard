@@ -2,20 +2,21 @@
 // Everything works on plain Job[] slices — pages filter first, then aggregate.
 
 import { jobGpInr, prevMonth, type Job } from "./jobs"
+import { inPeriod, periodMonths, type Period } from "./period"
 
 // ---------------------------------------------------------------------------
 // Filtering
 // ---------------------------------------------------------------------------
 
 export interface JobFilter {
-  month: string | null // "YYYY-MM"
+  period: Period | null // null = every month
   branch: string | null // canonical branch name
 }
 
 export function filterJobs(jobs: Job[], filter: JobFilter): Job[] {
   return jobs.filter(
     (j) =>
-      (filter.month === null || j.month === filter.month) &&
+      (filter.period === null || inPeriod(filter.period, j.month)) &&
       (filter.branch === null || j.branch === filter.branch),
   )
 }
@@ -103,23 +104,28 @@ export interface BranchComparisonRow {
   /** % Nomination among rows where the field is known; null when none known. */
   nomPct: number | null
   airKg: number
+  /** Months in the period in which this branch reported at least one job. */
+  activeMonths: number
+  /** jobs / activeMonths — comparable across branches with unequal history. */
+  jobsPerMonth: number | null
   /** Jobs in refMonth minus jobs in the previous month; null when no basis. */
   delta: number | null
   refMonth: string | null
 }
 
 /**
- * Per-branch stats. `scoped` is the month-filtered slice used for the counts;
- * `all` is the month-unfiltered slice (same branch scope) used for MoM delta.
- * refMonth = selected month, else the latest month present in the data.
+ * Per-branch stats. `scoped` is the period-filtered slice used for the counts;
+ * `all` is the period-unfiltered slice (same branch scope) used for MoM delta.
+ * refMonth = the selected month, else the latest data month inside the period.
  */
 export function branchComparison(
   all: Job[],
   scoped: Job[],
   months: string[],
-  selectedMonth: string | null,
+  period: Period,
 ): BranchComparisonRow[] {
-  const refMonth = selectedMonth ?? (months.length > 0 ? months[months.length - 1] : null)
+  const inScope = periodMonths(period, months)
+  const refMonth = period.kind === "month" ? period.month : (inScope[inScope.length - 1] ?? null)
   const prev = refMonth ? prevMonth(refMonth) : null
   const hasPrev = prev !== null && months.includes(prev)
 
@@ -134,6 +140,7 @@ export function branchComparison(
     const nom = known.filter((j) => j.nomination_freehand.trim().toLowerCase() === "nomination").length
     const refCount = refMonth ? branchAll.filter((j) => j.month === refMonth).length : 0
     const prevCount = hasPrev ? branchAll.filter((j) => j.month === prev).length : 0
+    const activeMonths = new Set(rows.map((j) => j.month)).size
     return {
       branch,
       jobs: rows.length,
@@ -142,6 +149,8 @@ export function branchComparison(
       clearanceOnly: rows.filter(isClearanceOnly).length,
       nomPct: known.length > 0 ? Math.round((nom / known.length) * 100) : null,
       airKg: rows.filter(isAir).reduce((acc, j) => acc + (j.gross_wt_kg ?? 0), 0),
+      activeMonths,
+      jobsPerMonth: activeMonths > 0 ? rows.length / activeMonths : null,
       delta: refMonth !== null && hasPrev ? refCount - prevCount : null,
       refMonth,
     }

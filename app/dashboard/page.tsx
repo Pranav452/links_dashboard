@@ -22,7 +22,8 @@ import {
   monthlyTrend,
   nominationSplit,
 } from "@/lib/analytics"
-import { branchFromSlug, branchSlug, fmtMonth, fmtMonthLong } from "@/lib/jobs"
+import { branchFromSlug, branchSlug, fmtMonth } from "@/lib/jobs"
+import { defaultPeriod, inPeriod, periodLabel, periodOptions, periodParam, resolvePeriod } from "@/lib/period"
 import { DataErrorPage } from "@/components/data-error"
 import { dataErrorMessage, loadJobs, loadJobsMeta, type JobsDataset, type JobsMeta } from "@/lib/store"
 
@@ -40,7 +41,7 @@ export default async function DashboardPage({
   const sp = await searchParams
 
   // Axes come from SQL aggregates; rows come from a branch-scoped query, so a
-  // branch filter never ships the whole table. The month filter stays in memory
+  // branch filter never ships the whole table. The period filter stays in memory
   // because the trend chart needs every month of the active branch scope.
   let meta: JobsMeta
   let dataset: JobsDataset
@@ -58,10 +59,14 @@ export default async function DashboardPage({
   const branchNames = meta.branches
   const branchOptions = branchNames.map((name) => ({ name, slug: branchSlug(name) }))
 
-  const month = sp.month && months.includes(sp.month) ? sp.month : null
+  // ?month= carries a period (fiscal year / all / single month); absent = the
+  // latest fiscal year, so branches with long history compare like-for-like.
+  const period = resolvePeriod(sp.month, months)
+  const periodValue = periodParam(period)
+  const options = periodOptions(months)
   const branchName = branchSlugParam ? branchFromSlug(branchSlugParam, branchNames) : null
-  const branchScoped = filterJobs(jobs, { month: null, branch: branchName })
-  const filtered = filterJobs(jobs, { month, branch: branchName })
+  const branchScoped = filterJobs(jobs, { period: null, branch: branchName })
+  const filtered = filterJobs(jobs, { period, branch: branchName })
 
   const activeBranches = new Set(filtered.map((j) => j.branch)).size
   const seaJobs = filtered.filter(isSea).length
@@ -78,18 +83,18 @@ export default async function DashboardPage({
   const topCustomers = countBy(filtered, (j) => j.customer).slice(0, 10)
   const topChas = countBy(filtered, (j) => j.cha).slice(0, 10)
 
-  // Trend always spans every month in the data (branch-scoped); the selected
-  // month stays solid, the rest go faint when a month filter is active.
+  // Trend always spans every month in the data (branch-scoped); months inside
+  // the selected period stay solid, the rest go faint.
   const trend = monthlyTrend(branchScoped, months).map((t) => ({
     label: fmtMonth(t.month),
     value: t.count,
-    muted: month !== null && t.month !== month,
+    muted: !inPeriod(period, t.month),
     hint: `${fmtMonth(t.month)} · ${t.count} jobs`,
   }))
 
-  const comparison = branchComparison(jobs, filtered, months, month)
+  const comparison = branchComparison(jobs, filtered, months, period)
 
-  const scopeLabel = [branchName, month ? fmtMonthLong(month) : null].filter(Boolean).join(" · ")
+  const scopeLabel = [branchName, period.kind === "all" ? null : periodLabel(period)].filter(Boolean).join(" · ")
 
   const thCls =
     "border-b border-foreground/10 px-3 py-2 text-left text-[10px] font-medium tracking-widest text-muted-foreground uppercase"
@@ -114,9 +119,11 @@ export default async function DashboardPage({
             </h1>
             <div className="flex flex-wrap items-center gap-4">
               <FilterBar
-                months={months}
+                fiscalYears={options.fiscalYears}
+                months={options.months}
                 branches={branchOptions}
-                month={month}
+                period={periodValue}
+                defaultPeriod={periodParam(defaultPeriod(months))}
                 branch={branchName ? branchSlug(branchName) : null}
               />
               <span className="text-xs text-muted-foreground">
@@ -130,7 +137,7 @@ export default async function DashboardPage({
 
         {/* KPI row */}
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
-          <KpiCard label="Total jobs" value={fmtNum(filtered.length)} icon={<Briefcase />} accent sub={scopeLabel || "All branches · all months"} />
+          <KpiCard label="Total jobs" value={fmtNum(filtered.length)} icon={<Briefcase />} accent sub={period.kind === "all" ? `${branchName ?? "All branches"} · all months` : scopeLabel} />
           <KpiCard label="Active branches" value={String(activeBranches)} icon={<Building2 />} sub={`of ${branchNames.length} reporting`} />
           <KpiCard label="Sea jobs" value={fmtNum(seaJobs)} icon={<Ship />} sub="Sea Import + Sea Export" />
           <KpiCard label="Air jobs" value={fmtNum(airJobs)} icon={<Plane />} sub="Air Import + Air Export" />
@@ -204,6 +211,9 @@ export default async function DashboardPage({
                 <tr>
                   <th className={thCls}>Branch</th>
                   <th className={`${thCls} text-right`}>Jobs</th>
+                  <th className={`${thCls} text-right`} title="Jobs per month the branch reported in this period">
+                    Jobs / month
+                  </th>
                   <th className={`${thCls} text-right`}>Sea / Air</th>
                   <th className={`${thCls} text-right`}>Clearance only</th>
                   <th className={`${thCls} text-right`}>Nomination %</th>
@@ -217,6 +227,16 @@ export default async function DashboardPage({
                   <tr key={row.branch} className="transition-colors hover:bg-foreground/[0.03]">
                     <td className={`${tdCls} font-medium`}>{row.branch}</td>
                     <td className={`${tdCls} text-right font-semibold`}>{fmtNum(row.jobs)}</td>
+                    <td className={`${tdCls} text-right`}>
+                      {row.jobsPerMonth === null ? (
+                        "—"
+                      ) : (
+                        <>
+                          {row.jobsPerMonth.toLocaleString("en-IN", { maximumFractionDigits: 1 })}
+                          <span className="ml-1 text-muted-foreground/60">· {row.activeMonths} mo</span>
+                        </>
+                      )}
+                    </td>
                     <td className={`${tdCls} text-right text-muted-foreground`}>
                       {fmtNum(row.sea)} / {fmtNum(row.air)}
                     </td>
@@ -240,11 +260,7 @@ export default async function DashboardPage({
                     </td>
                     <td className={`${tdCls} text-right`}>
                       <Link
-                        href={
-                          month
-                            ? `/dashboard/branch/${branchSlug(row.branch)}?month=${encodeURIComponent(month)}`
-                            : `/dashboard/branch/${branchSlug(row.branch)}`
-                        }
+                        href={`/dashboard/branch/${branchSlug(row.branch)}?month=${encodeURIComponent(periodValue)}`}
                         className="inline-flex items-center gap-1 text-emerald-600 transition-colors hover:text-emerald-500 dark:text-emerald-400"
                       >
                         View

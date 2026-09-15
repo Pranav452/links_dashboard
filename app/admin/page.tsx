@@ -1,6 +1,6 @@
 import type { Metadata } from "next"
 import { redirect } from "next/navigation"
-import { Database, FileSpreadsheet, History, KeyRound } from "lucide-react"
+import { CopyX, Database, FileSpreadsheet, History, KeyRound } from "lucide-react"
 
 import { DataErrorCard } from "@/components/data-error"
 import { SiteHeader } from "@/components/site-header"
@@ -10,7 +10,15 @@ import { getSession } from "@/lib/auth"
 import { dbEnabled } from "@/lib/db"
 import { fmtNum } from "@/lib/analytics"
 import { fmtMonth } from "@/lib/jobs"
-import { dataErrorMessage, listUploads, loadJobsMeta, type JobsMeta, type UploadLogEntry } from "@/lib/store"
+import {
+  dataErrorMessage,
+  listUploads,
+  loadExclusionSummary,
+  loadJobsMeta,
+  type ExclusionSummaryRow,
+  type JobsMeta,
+  type UploadLogEntry,
+} from "@/lib/store"
 import { UploadForm } from "./upload-form"
 
 export const metadata: Metadata = {
@@ -26,9 +34,10 @@ export default async function AdminPage() {
   // Aggregates + the ingest log only — the admin page never pulls job rows.
   let meta: JobsMeta | null = null
   let uploads: UploadLogEntry[] = []
+  let exclusions: ExclusionSummaryRow[] = []
   let dataError: string | null = null
   try {
-    ;[meta, uploads] = await Promise.all([loadJobsMeta(), listUploads(50)])
+    ;[meta, uploads, exclusions] = await Promise.all([loadJobsMeta(), listUploads(50), loadExclusionSummary()])
   } catch (err) {
     dataError = dataErrorMessage(err)
   }
@@ -154,6 +163,51 @@ export default async function AdminPage() {
                 Last ingest: {meta.lastUpload ? new Date(meta.lastUpload).toLocaleString("en-IN") : "—"}
               </span>
             </div>
+          )}
+        </Card>
+
+        {/* Hidden duplicates — read-only audit of lib/dedup.ts flags */}
+        <Card className="mt-4 gap-4 rounded-2xl border-foreground/[0.06] bg-foreground/[0.02] p-6 shadow-none">
+          <div className="flex items-center gap-2">
+            <CopyX className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+            <span className="text-xs font-medium tracking-widest uppercase">Duplicates hidden</span>
+          </div>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Lines the branches repeat in their own sheets — last month&rsquo;s jobs copied forward, a shipment logged
+            again as its clearance or forwarding leg, cancelled / amendment / drawback entries — stay in{" "}
+            <code className="rounded bg-foreground/[0.06] px-1 py-0.5 font-mono text-[11px]">links_jobs</code> but
+            are excluded from every dashboard figure. Re-checked for the branch on every upload.
+          </p>
+          {exclusions.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr>
+                    <th className={thCls}>Branch</th>
+                    <th className={`${thCls} text-right`}>Hidden</th>
+                    <th className={thCls}>Reasons</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {exclusions.map((e) => (
+                    <tr key={e.branch}>
+                      <td className={`${tdCls} font-medium whitespace-nowrap`}>{e.branch}</td>
+                      <td className={`${tdCls} text-right font-semibold tabular-nums`}>{fmtNum(e.total)}</td>
+                      <td className={`${tdCls} text-muted-foreground`}>
+                        {Object.entries(e.reasons)
+                          .sort((a, b) => b[1] - a[1])
+                          .map(([reason, n]) => `${reason} ${fmtNum(n)}`)
+                          .join(" · ")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              {dataError ? "Unavailable while the database is unreachable." : "No rows are currently hidden."}
+            </p>
           )}
         </Card>
 

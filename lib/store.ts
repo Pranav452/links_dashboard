@@ -1,10 +1,15 @@
 import type { Job } from "./jobs"
 import { getSql, withRetry } from "./db"
+import { flagDuplicates, reasonBucket, type DedupJob } from "./dedup"
 
 // ---------------------------------------------------------------------------
 // Jobs are REAL ROWS in links_jobs — one row per job line. Neon is the only
 // source of truth: there is no bundled seed, no data/*.json fallback and no
 // hardcoded dataset. Without DATABASE_URL every read/write throws.
+//
+// Rows flagged by lib/dedup.ts (copied-forward lines, clearance/forwarding
+// repeats, non-shipments) carry excluded_reason and are HIDDEN from every
+// dashboard read below — never deleted.
 // ---------------------------------------------------------------------------
 
 export const NO_DB_MESSAGE = "DATABASE_URL is not configured — the dashboard reads from Neon"
@@ -18,6 +23,9 @@ export interface JobsDataset {
 export interface JobsFilter {
   branch?: string
   month?: string
+  /** Inclusive "YYYY-MM" range (fiscal-year periods). */
+  monthFrom?: string
+  monthTo?: string
 }
 
 export interface JobsMeta {
@@ -204,7 +212,16 @@ export async function loadJobs(filter: JobsFilter = {}): Promise<JobsDataset> {
     scope.push(filter.month)
     where.push(`month = $${scope.length}`)
   }
-  const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
+  if (filter.monthFrom !== undefined) {
+    scope.push(filter.monthFrom)
+    where.push(`month >= $${scope.length}`)
+  }
+  if (filter.monthTo !== undefined) {
+    scope.push(filter.monthTo)
+    where.push(`month <= $${scope.length}`)
+  }
+  where.push("excluded_reason IS NULL")
+  const whereSql = `WHERE ${where.join(" AND ")}`
 
   const jobs: Job[] = []
   let updatedAt: string | null = null
@@ -239,18 +256,21 @@ export async function loadJobs(filter: JobsFilter = {}): Promise<JobsDataset> {
 
 /**
  * Dataset shape (totals, branch + month axes, last ingest) via SQL aggregates —
- * used by headers and filter bars so they never pull rows.
+ * used by headers and filter bars so they never pull rows. Hidden duplicate
+ * rows are not counted.
  */
 export async function loadJobsMeta(): Promise<JobsMeta> {
   const sql = requireSql()
   const rows = (await withRetry(() => sql`
     SELECT
-      (SELECT count(*) FROM links_jobs) AS total,
+      (SELECT count(*) FROM links_jobs WHERE excluded_reason IS NULL) AS total,
       (SELECT max(uploaded_at) FROM links_jobs) AS last_upload,
       (SELECT coalesce(json_agg(b ORDER BY b), '[]'::json)
-         FROM (SELECT DISTINCT branch AS b FROM links_jobs WHERE branch <> '') s) AS branches,
+         FROM (SELECT DISTINCT branch AS b FROM links_jobs
+                WHERE branch <> '' AND excluded_reason IS NULL) s) AS branches,
       (SELECT coalesce(json_agg(m ORDER BY m), '[]'::json)
-         FROM (SELECT DISTINCT month AS m FROM links_jobs WHERE month <> '') s) AS months
+         FROM (SELECT DISTINCT month AS m FROM links_jobs
+                WHERE month <> '' AND excluded_reason IS NULL) s) AS months
   `)) as Row[]
 
   const r = rows[0] ?? {}
@@ -260,6 +280,35 @@ export async function loadJobsMeta(): Promise<JobsMeta> {
     months: Array.isArray(r.months) ? (r.months as string[]) : [],
     lastUpload: r.last_upload ? String(r.last_upload) : null,
   }
+}
+
+export interface ExclusionSummaryRow {
+  branch: string
+  total: number
+  /** reason bucket ("copied-forward", "clearance-repeat", ...) -> rows */
+  reasons: Record<string, number>
+}
+
+/** Hidden duplicate rows per branch, grouped by reason bucket (admin audit card). */
+export async function loadExclusionSummary(): Promise<ExclusionSummaryRow[]> {
+  const sql = requireSql()
+  const rows = (await withRetry(() => sql`
+    SELECT branch, excluded_reason AS reason, count(*)::int AS n
+      FROM links_jobs
+     WHERE excluded_reason IS NOT NULL
+     GROUP BY branch, excluded_reason
+  `)) as Row[]
+  const byBranch = new Map<string, ExclusionSummaryRow>()
+  for (const r of rows) {
+    const branch = toStr(r.branch)
+    const entry = byBranch.get(branch) ?? { branch, total: 0, reasons: {} }
+    const n = toNum(r.n) ?? 0
+    const bucket = reasonBucket(toStr(r.reason))
+    entry.total += n
+    entry.reasons[bucket] = (entry.reasons[bucket] ?? 0) + n
+    byBranch.set(branch, entry)
+  }
+  return [...byBranch.values()].sort((a, b) => b.total - a.total || a.branch.localeCompare(b.branch))
 }
 
 export async function listUploads(limit = 50): Promise<UploadLogEntry[]> {
@@ -351,6 +400,112 @@ export async function replaceBranchMonth(
   `)
 
   return { deleted, inserted }
+}
+
+// ---------------------------------------------------------------------------
+// Duplicate exclusion (lib/dedup.ts) — flags are recomputed from scratch and
+// persisted atomically, so re-running is idempotent. Rows are never deleted.
+// ---------------------------------------------------------------------------
+
+export type DedupRow = DedupJob & { id: number; excluded_reason: string | null }
+
+/** Every row (hidden ones included) with the fields the dedup rules need. */
+export async function loadDedupRows(branch?: string): Promise<DedupRow[]> {
+  const sql = requireSql()
+  const whereSql = branch === undefined ? "" : "WHERE branch = $3"
+  const out: DedupRow[] = []
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const rows = (await withRetry(() =>
+      sql.query(
+        `SELECT id, ${SELECT_COLUMNS}, excluded_reason
+           FROM links_jobs
+           ${whereSql}
+          ORDER BY month, branch, id
+          LIMIT $1 OFFSET $2`,
+        branch === undefined ? [PAGE_SIZE, offset] : [PAGE_SIZE, offset, branch],
+      ),
+    )) as Row[]
+    for (const r of rows) {
+      out.push({
+        ...rowToJob(r),
+        id: toNum(r.id) ?? 0,
+        excluded_reason: r.excluded_reason === null || r.excluded_reason === undefined ? null : String(r.excluded_reason),
+      })
+    }
+    if (rows.length < PAGE_SIZE) break
+  }
+  return out
+}
+
+/**
+ * Replaces the exclusion flags for a scope (one branch, or the whole table)
+ * with `flags` in ONE transaction: every previously hidden row in scope is
+ * un-hidden, then flagged rows get their reason. excluded_at survives for rows
+ * whose reason did not change, so re-runs are idempotent.
+ */
+export async function persistExclusions(
+  flags: Map<number, string>,
+  branch?: string,
+): Promise<{ hidden: number; cleared: number }> {
+  const sql = requireSql()
+  const ids = [...flags.keys()]
+  const reasons = ids.map((id) => flags.get(id)!)
+  const inScope = branch === undefined ? "" : "AND branch = $3"
+  const scopeParams = branch === undefined ? [] : [branch]
+
+  const results = (await withRetry(() =>
+    sql.transaction([
+      // Remember the current flags, clear the scope, then re-apply — a row
+      // keeps its excluded_at when its reason is unchanged.
+      sql.query(
+        `WITH v AS (SELECT unnest($1::bigint[]) AS id, unnest($2::text[]) AS reason),
+         cleared AS (
+           UPDATE links_jobs j
+              SET excluded_reason = NULL, excluded_at = NULL
+            WHERE j.excluded_reason IS NOT NULL ${inScope}
+              AND NOT EXISTS (SELECT 1 FROM v WHERE v.id = j.id AND v.reason = j.excluded_reason)
+           RETURNING 1)
+         SELECT count(*)::int AS n FROM cleared`,
+        [ids, reasons, ...scopeParams],
+      ),
+      sql.query(
+        `WITH v AS (SELECT unnest($1::bigint[]) AS id, unnest($2::text[]) AS reason),
+         hidden AS (
+           UPDATE links_jobs j
+              SET excluded_reason = v.reason, excluded_at = coalesce(j.excluded_at, now())
+             FROM v
+            WHERE j.id = v.id ${inScope.replace("branch", "j.branch")}
+           RETURNING 1)
+         SELECT count(*)::int AS n FROM hidden`,
+        [ids, reasons, ...scopeParams],
+      ),
+    ]),
+  )) as Row[][]
+
+  return { cleared: toNum(results[0]?.[0]?.n) ?? 0, hidden: toNum(results[1]?.[0]?.n) ?? 0 }
+}
+
+/**
+ * Re-runs the duplicate rules for one branch (all months — copy-forward
+ * compares against earlier months) and persists that branch's flags. Returns
+ * the rows now hidden in the whole branch and in `month`, by reason.
+ */
+export async function refreshBranchExclusions(
+  branch: string,
+  month?: string,
+): Promise<{ branchHidden: number; monthHidden: number; monthReasons: Record<string, number> }> {
+  const rows = await loadDedupRows(branch)
+  const flags = flagDuplicates(rows) as Map<number, string>
+  await persistExclusions(flags, branch)
+  const monthReasons: Record<string, number> = {}
+  let monthHidden = 0
+  for (const r of rows) {
+    const reason = month !== undefined && r.month === month ? flags.get(r.id) : undefined
+    if (reason === undefined) continue
+    monthHidden++
+    monthReasons[reason] = (monthReasons[reason] ?? 0) + 1
+  }
+  return { branchHidden: flags.size, monthHidden, monthReasons }
 }
 
 /** Bulk append (seeding / backfill) — chunked, no delete, no upload-log entry. */

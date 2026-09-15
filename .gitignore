@@ -42,3 +42,6 @@ next-env.d.ts
 
 # runtime state (jobs dataset, expenses, audit log)
 /data/
+
+# dedup flag backups (scripts/dedup.ts)
+/backups

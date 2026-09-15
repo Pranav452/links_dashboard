@@ -4,8 +4,9 @@ import { revalidatePath } from "next/cache"
 
 import { audit, getSession } from "@/lib/auth"
 import { parseTemplate } from "@/lib/ingest"
-import { fmtMonth } from "@/lib/jobs"
-import { loadJobsMeta, replaceBranchMonth } from "@/lib/store"
+import { REASON_CLEARANCE_REPEAT, REASON_COPIED_PREFIX, REASON_FORWARDING_REPEAT, REASON_NON_SHIPMENT } from "@/lib/dedup"
+import { fmtMonth, fmtMonthLong } from "@/lib/jobs"
+import { loadJobsMeta, refreshBranchExclusions, replaceBranchMonth } from "@/lib/store"
 
 const MAX_BYTES = 8 * 1024 * 1024
 
@@ -22,6 +23,34 @@ export interface IngestState {
   rowErrors?: string[]
   warnings?: string[]
   totalJobs?: number
+  hiddenDuplicates?: number
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+
+/** Upload feedback for rows of the uploaded month that the dedup rules hid. */
+function duplicateWarnings(reasons: Record<string, number>): string[] {
+  const out: string[] = []
+  const copied = new Map<string, number>()
+  for (const [reason, n] of Object.entries(reasons)) {
+    if (reason.startsWith(REASON_COPIED_PREFIX)) {
+      const from = reason.slice(REASON_COPIED_PREFIX.length)
+      copied.set(from, (copied.get(from) ?? 0) + n)
+    }
+  }
+  for (const [from, n] of [...copied].sort()) {
+    out.push(`${plural(n, "job repeats", "jobs repeat")} ${fmtMonthLong(from)}'s report and ${n === 1 ? "was" : "were"} hidden as duplicates.`)
+  }
+  const other: [string, string][] = [
+    [REASON_CLEARANCE_REPEAT, "clearance-only row repeats a freight job's shipment in the same month"],
+    [REASON_FORWARDING_REPEAT, "freight-only row repeats a Freight + Clearance job's MBL/MAWB"],
+    [REASON_NON_SHIPMENT, "cancelled / amendment / drawback line is not a shipment"],
+  ]
+  for (const [reason, text] of other) {
+    const n = reasons[reason] ?? 0
+    if (n > 0) out.push(`${n} × ${text} — hidden as ${n === 1 ? "a duplicate" : "duplicates"}.`)
+  }
+  return out
 }
 
 // Parses a filled productivity template and REPLACES that branch+month's rows
@@ -67,6 +96,21 @@ export async function ingestTemplate(_prev: IngestState, formData: FormData): Pr
       session.u,
     )
 
+    // Copy-forward compares against earlier months, so the whole branch is
+    // re-evaluated; flags for every other branch are untouched. The rows are
+    // already stored — a failure here only leaves this branch's flags stale.
+    const warnings = [...parsed.warnings]
+    let hiddenDuplicates = 0
+    try {
+      const dedup = await refreshBranchExclusions(parsed.branch, parsed.month)
+      hiddenDuplicates = dedup.monthHidden
+      warnings.push(...duplicateWarnings(dedup.monthReasons))
+    } catch (err) {
+      warnings.push(
+        `Duplicate check failed (${err instanceof Error ? err.message : String(err)}) — rows were saved; re-run scripts/dedup.ts --apply.`,
+      )
+    }
+
     const meta = await loadJobsMeta()
 
     await audit("template-ingested", {
@@ -76,6 +120,7 @@ export async function ingestTemplate(_prev: IngestState, formData: FormData): Pr
       month: parsed.month,
       added: String(inserted),
       replaced: String(deleted),
+      hiddenDuplicates: String(hiddenDuplicates),
     })
     revalidatePath("/", "layout")
 
@@ -89,8 +134,9 @@ export async function ingestTemplate(_prev: IngestState, formData: FormData): Pr
       replaced: deleted,
       skippedEmpty: parsed.skippedEmpty,
       rowErrors: parsed.rowErrors,
-      warnings: parsed.warnings,
+      warnings,
       totalJobs: meta.total,
+      hiddenDuplicates,
     }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }

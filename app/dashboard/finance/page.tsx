@@ -8,7 +8,17 @@ import { Button } from "@/components/ui/button"
 import { fmtINR, fmtNum } from "@/lib/analytics"
 import { getSession } from "@/lib/auth"
 import { DataErrorPage } from "@/components/data-error"
-import { branchFromSlug, branchSlug, fmtMonth, fmtMonthLong, jobGpInr, type Job } from "@/lib/jobs"
+import { branchFromSlug, branchSlug, fmtMonth, jobGpInr, type Job } from "@/lib/jobs"
+import {
+  defaultPeriod,
+  periodJobsFilter,
+  periodLabel,
+  periodMonths,
+  periodOptions,
+  periodParam,
+  resolvePeriod,
+  type Period,
+} from "@/lib/period"
 import {
   dataErrorMessage,
   loadExpenses,
@@ -52,14 +62,14 @@ export default async function FinancePage({
   let meta: JobsMeta
   let expensesMap: ExpensesMap
   let filtered: Job[]
-  let month: string | null = null
+  let period: Period = { kind: "all" }
   let branchName: string | null = null
   try {
     meta = await loadJobsMeta()
-    month = sp.month && meta.months.includes(sp.month) ? sp.month : null
+    period = resolvePeriod(sp.month, meta.months)
     branchName = sp.branch ? branchFromSlug(sp.branch, meta.branches) : null
     const [dataset, expenses] = await Promise.all([
-      loadJobs({ ...(branchName ? { branch: branchName } : {}), ...(month ? { month } : {}) }),
+      loadJobs({ ...(branchName ? { branch: branchName } : {}), ...periodJobsFilter(period) }),
       loadExpenses(),
     ])
     filtered = dataset.jobs
@@ -73,8 +83,7 @@ export default async function FinancePage({
 
   const expensesFor = (branch: string): number => {
     const row = expensesMap[branch] ?? {}
-    if (month) return row[month] ?? 0
-    return months.reduce((acc, m) => acc + (row[m] ?? 0), 0)
+    return periodMonths(period, months).reduce((acc, m) => acc + (row[m] ?? 0), 0)
   }
 
   const visibleBranches = branchName ? [branchName] : branchNames
@@ -113,7 +122,8 @@ export default async function FinancePage({
   const coverage = totals.jobs > 0 ? Math.round((totals.withFin / totals.jobs) * 100) : 0
   const hasFinancials = totals.withFin > 0
 
-  const scopeLabel = [branchName, month ? fmtMonthLong(month) : null].filter(Boolean).join(" · ")
+  const scopeLabel = [branchName, period.kind === "all" ? null : periodLabel(period)].filter(Boolean).join(" · ")
+  const options = periodOptions(months)
 
   const thCls =
     "border-b border-foreground/10 px-3 py-2 text-left text-[10px] font-medium tracking-widest text-muted-foreground uppercase"
@@ -138,9 +148,11 @@ export default async function FinancePage({
               {scopeLabel && <span className="text-emerald-600 dark:text-emerald-400"> · {scopeLabel}</span>}
             </h1>
             <FilterBar
-              months={months}
+              fiscalYears={options.fiscalYears}
+              months={options.months}
               branches={branchNames.map((name) => ({ name, slug: branchSlug(name) }))}
-              month={month}
+              period={periodParam(period)}
+              defaultPeriod={periodParam(defaultPeriod(months))}
               branch={branchName ? branchSlug(branchName) : null}
             />
           </div>
@@ -198,7 +210,7 @@ export default async function FinancePage({
               Per-branch financials
             </span>
             <span className="text-xs text-muted-foreground/60">
-              Net = gross profit − fixed expenses ({month ? fmtMonthLong(month) : "all months"})
+              Net = gross profit − fixed expenses ({periodLabel(period)})
             </span>
           </div>
           <div className="overflow-x-auto">

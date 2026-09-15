@@ -1,9 +1,10 @@
 // Creates the Neon tables for links-branches. Run: npx tsx scripts/migrate.ts
 // Idempotent — safe to re-run. Requires DATABASE_URL (the dashboard is DB-only).
 import { neon } from "@neondatabase/serverless"
-import { loadEnvLocal } from "./env"
+import { installPublicDnsFallback, loadEnvLocal } from "./env"
 
 loadEnvLocal()
+installPublicDnsFallback()
 
 async function main() {
   const url = process.env.DATABASE_URL
@@ -65,6 +66,16 @@ async function main() {
   await sql`CREATE INDEX IF NOT EXISTS links_jobs_pod_idx ON links_jobs (pod)`
   await sql`CREATE INDEX IF NOT EXISTS links_jobs_customer_idx ON links_jobs (customer)`
 
+  // Duplicate / non-shipment rows copied from the branch sheets are HIDDEN,
+  // never deleted: excluded_reason is set by lib/dedup.ts (scripts/dedup.ts and
+  // every admin upload). Every dashboard read filters excluded_reason IS NULL.
+  await sql`ALTER TABLE links_jobs ADD COLUMN IF NOT EXISTS excluded_reason text NULL`
+  await sql`ALTER TABLE links_jobs ADD COLUMN IF NOT EXISTS excluded_at timestamptz NULL`
+  await sql`
+    CREATE INDEX IF NOT EXISTS links_jobs_visible_branch_month_idx
+      ON links_jobs (branch, month) WHERE excluded_reason IS NULL
+  `
+
   // -------------------------------------------------------------------------
   // links_uploads — append-only ingest log (replaces the old version history).
   // Rollback = re-upload that branch + month, which is scoped and safe.
@@ -109,7 +120,7 @@ async function main() {
     )
   `
 
-  console.log("Migration complete: links_users, links_jobs, links_uploads, links_config (+ legacy links_jobs_versions).")
+  console.log("Migration complete: links_users, links_jobs (+ excluded_reason/excluded_at), links_uploads, links_config (+ legacy links_jobs_versions).")
 }
 
 main().catch((err) => {

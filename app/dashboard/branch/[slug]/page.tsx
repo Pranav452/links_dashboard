@@ -21,7 +21,8 @@ import {
   isSea,
   monthlyTrend,
 } from "@/lib/analytics"
-import { branchFromSlug, branchSlug, fmtMonth, fmtMonthLong, type Job } from "@/lib/jobs"
+import { branchFromSlug, branchSlug, fmtMonth, type Job } from "@/lib/jobs"
+import { defaultPeriod, inPeriod, periodLabel, periodOptions, periodParam, resolvePeriod } from "@/lib/period"
 import { DataErrorPage } from "@/components/data-error"
 import { dataErrorMessage, loadJobs, loadJobsMeta, type JobsMeta } from "@/lib/store"
 
@@ -47,7 +48,7 @@ export default async function BranchPage({
 }) {
   const [{ slug }, sp] = await Promise.all([params, searchParams])
 
-  // Only this branch's rows are fetched (SQL-side filter). The month filter is
+  // Only this branch's rows are fetched (SQL-side filter). The period filter is
   // applied in memory because the trend chart spans every month of the branch.
   let meta: JobsMeta
   let branchJobs: Job[]
@@ -63,8 +64,10 @@ export default async function BranchPage({
 
   const months = meta.months
   const branch = resolved
-  const month = sp.month && months.includes(sp.month) ? sp.month : null
-  const filtered = filterJobs(branchJobs, { month, branch: null })
+  const period = resolvePeriod(sp.month, months)
+  const options = periodOptions(months)
+  const filtered = filterJobs(branchJobs, { period, branch: null })
+  const reportedMonths = new Set(filtered.map((j) => j.month)).size
 
   const customers = new Set(filtered.map((j) => j.customer.trim()).filter(Boolean)).size
   const seaJobs = filtered.filter(isSea).length
@@ -82,7 +85,7 @@ export default async function BranchPage({
   const trend = monthlyTrend(branchJobs, months).map((t) => ({
     label: fmtMonth(t.month),
     value: t.count,
-    muted: month !== null && t.month !== month,
+    muted: !inPeriod(period, t.month),
     hint: `${fmtMonth(t.month)} · ${t.count} jobs`,
   }))
 
@@ -106,14 +109,16 @@ export default async function BranchPage({
           <div className="flex flex-wrap items-end justify-between gap-4">
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
               {branch}
-              {month && (
-                <span className="text-emerald-600 dark:text-emerald-400"> · {fmtMonthLong(month)}</span>
+              {period.kind !== "all" && (
+                <span className="text-emerald-600 dark:text-emerald-400"> · {periodLabel(period)}</span>
               )}
             </h1>
             <FilterBar
-              months={months}
+              fiscalYears={options.fiscalYears}
+              months={options.months}
               branches={meta.branches.map((name) => ({ name, slug: branchSlug(name) }))}
-              month={month}
+              period={periodParam(period)}
+              defaultPeriod={periodParam(defaultPeriod(months))}
               branch={slug}
             />
           </div>
@@ -121,7 +126,11 @@ export default async function BranchPage({
 
         {/* KPI row */}
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
-          <KpiCard label="Total jobs" value={fmtNum(filtered.length)} icon={<Briefcase />} accent sub={month ? fmtMonthLong(month) : "All months"} />
+          <KpiCard label="Total jobs" value={fmtNum(filtered.length)} icon={<Briefcase />} accent sub={
+              period.kind === "month" || reportedMonths === 0
+                ? periodLabel(period)
+                : `${periodLabel(period)} · ${(filtered.length / reportedMonths).toLocaleString("en-IN", { maximumFractionDigits: 1 })} / month over ${reportedMonths} mo`
+            } />
           <KpiCard label="Customers" value={fmtNum(customers)} icon={<Users />} sub="Distinct shippers / consignees" />
           <KpiCard label="Sea jobs" value={fmtNum(seaJobs)} icon={<Ship />} sub="Sea Import + Sea Export" />
           <KpiCard label="Air jobs" value={fmtNum(airJobs)} icon={<Plane />} sub="Air Import + Air Export" />
