@@ -20,6 +20,7 @@ export interface IngestState {
   replaced?: number
   skippedEmpty?: number
   rowErrors?: string[]
+  warnings?: string[]
   totalJobs?: number
 }
 
@@ -88,6 +89,7 @@ export async function ingestTemplate(_prev: IngestState, formData: FormData): Pr
       replaced: deleted,
       skippedEmpty: parsed.skippedEmpty,
       rowErrors: parsed.rowErrors,
+      warnings: parsed.warnings,
       totalJobs: meta.total,
     }
   } catch (err) {

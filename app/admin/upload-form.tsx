@@ -106,6 +106,19 @@ export function UploadForm() {
             {state.fortnight && <span>Fortnight: {state.fortnight}</span>}
             <span>{state.totalJobs?.toLocaleString("en-IN")} jobs in dataset now</span>
           </div>
+          {state.warnings && state.warnings.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <TriangleAlert className="h-3.5 w-3.5" />
+                Imported, with notes for the branch
+              </span>
+              <ul className="rounded-xl bg-foreground/[0.03] p-3 text-[11px] leading-relaxed text-muted-foreground">
+                {state.warnings.map((w, i) => (
+                  <li key={i}>· {w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {state.rowErrors && state.rowErrors.length > 0 && (
             <div className="flex flex-col gap-1.5">
               <span className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
